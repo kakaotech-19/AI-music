@@ -1,0 +1,10 @@
+# requirements.txt
+
+fastapi
+uvicorn
+openai==0.28
+scipy
+torch
+python-dotenv
+soundfile
+musicgen
