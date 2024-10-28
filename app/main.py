@@ -1,25 +1,28 @@
-# app/main.py
-
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import openai
-import musicgen
-import numpy as np
-import soundfile as sf
-import torch
+from transformers import pipeline
 import os
 import uuid
 from dotenv import load_dotenv
-from io import BytesIO
+import soundfile as sf
+import numpy as np
+import logging
+import torch
 
-# 환경 변수 로드
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Load environment variables
 load_dotenv()
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 
 if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY 환경 변수가 설정되지 않았습니다.")
 
-# OpenAI API 키 설정
+
+# Set OpenAI API key
 openai.api_key = OPENAI_API_KEY
 
 app = FastAPI(
@@ -28,13 +31,32 @@ app = FastAPI(
     version="1.0"
 )
 
-# 음악 생성 요청 데이터 모델
+
+# Define data models
 class DiaryEntry(BaseModel):
     diary: str
 
-# 음악 생성 응답 데이터 모델
+
 class MusicResponse(BaseModel):
     file_urls: list[str]
+
+
+# Load pipeline once at startup
+try:
+    pipe = pipeline("text-to-audio", model="facebook/musicgen-melody")
+    logger.info("MusicGen pipeline loaded successfully.")
+except Exception as e:
+    logger.error(f"Error loading MusicGen pipeline: {e}")
+    raise e
+
+# Test numpy availability
+try:
+    np.array([1, 2, 3])
+    logger.info("Numpy is available.")
+except ImportError:
+    logger.error("Numpy is not available.")
+    raise
+
 
 def extract_music_prompt(diary_entry: str) -> str:
     """
@@ -61,54 +83,104 @@ def extract_music_prompt(diary_entry: str) -> str:
         prompt = response.choices[0].message['content'].strip()
         return prompt
     except Exception as e:
+        logger.error(f"프롬프트 생성 오류: {e}")
         raise HTTPException(status_code=500, detail=f"프롬프트 생성 오류: {str(e)}")
 
-def generate_and_save_music(prompts: list[str], sample_rate=32000, output_dir='generated_music_files') -> list[str]:
+
+def generate_and_save_music(prompts: list[str], output_dir='generated_music_files') -> list[str]:
     """
     주어진 프롬프트 리스트를 기반으로 음악을 생성하고 파일로 저장하는 함수
     """
     try:
-        # 사전 학습된 모델을 전역으로 불러오기
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        model = musicgen.MusicGen.get_pretrained('medium', device=device)
-        model.set_generation_params(duration=15)  # 필요에 따라 조정 가능
+        # Generate audio using the pipeline with duration=15 seconds
+        audio_outputs = pipe(prompts)
 
-        # 음악 생성
-        res = model.generate(prompts, progress=False)
+        # 디버깅을 위해 출력 형식 로그
+        logger.info(f"audio_outputs type: {type(audio_outputs)}")
+        logger.info(f"audio_outputs content: {audio_outputs}")
 
-        # 생성된 음악을 파일로 저장하고 파일 URL 리스트를 반환
+        # Create output directory if it doesn't exist
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Save each generated audio to a file
         file_urls = []
-        for idx, audio_tensor in enumerate(res):
-            # NumPy 배열로 변환
-            audio_np = audio_tensor.cpu().numpy()
+        for idx, audio in enumerate(audio_outputs):
+            logger.info(f"Processing audio {idx + 1}: {audio}")
 
-            # 데이터 타입과 범위에 맞게 변환
-            if audio_np.dtype == np.float32 or audio_np.dtype == np.float64:
-                audio_np = np.int16(audio_np * 32767)  # Scale to int16 range
+            # 예상되는 키 확인 및 데이터 추출
+            if isinstance(audio, dict):
+                if 'audio' in audio and 'sampling_rate' in audio:
+                    data = audio['audio']
+                    sampling_rate = audio['sampling_rate']
+                elif 'array' in audio and 'sampling_rate' in audio:
+                    data = audio['array']
+                    sampling_rate = audio['sampling_rate']
+                elif 'samples' in audio and 'sampling_rate' in audio:
+                    data = audio['samples']
+                    sampling_rate = audio['sampling_rate']
+                else:
+                    logger.error("Unexpected audio format: missing 'audio', 'array', or 'samples' key.")
+                    raise KeyError("Unexpected audio format: missing 'audio', 'array', or 'samples' key.")
+            elif isinstance(audio, (np.ndarray, torch.Tensor)):
+                data = audio.cpu().numpy() if isinstance(audio, torch.Tensor) else audio
+                sampling_rate = 32000  # 모델에 따라 샘플링 레이트 조정
+            else:
+                logger.error(f"Unsupported audio format: {type(audio)}")
+                raise TypeError(f"Unsupported audio format: {type(audio)}")
 
-            # Reshape the audio data to a 1D array if it's not already
-            if audio_np.ndim > 1:
-                audio_np = audio_np.reshape(-1)
+            # 데이터의 차원 확인 및 축소
+            if data.ndim == 3:
+                data = data.squeeze()  # (1, 1, 480000) -> (480000,)
+            elif data.ndim == 2 and data.shape[0] == 1:
+                data = data.squeeze(0)  # (1, 480000) -> (480000,)
+            elif data.ndim == 2:
+                pass  # 이미 (채널, 샘플) 형태
+            else:
+                logger.error(f"Unexpected data shape: {data.shape}")
+                raise ValueError(f"Unexpected data shape: {data.shape}")
 
-            # 파일명 생성
+            # 샘플링 레이트 확인
+            if sampling_rate <= 0:
+                logger.error(f"Invalid sampling rate: {sampling_rate}")
+                raise ValueError(f"Invalid sampling rate: {sampling_rate}")
+
+            # 원하는 길이 설정 (15초)
+            desired_duration = 15  # 초
+            desired_samples = desired_duration * sampling_rate  # 샘플 수
+
+            # 현재 샘플 수 확인
+            current_samples = data.shape[-1]
+            if current_samples < desired_samples:
+                logger.warning(
+                    f"Generated audio is shorter than desired duration: {current_samples / sampling_rate:.2f}s")
+                # 필요에 따라 패딩을 추가할 수 있습니다.
+            else:
+                # 오디오 데이터 슬라이싱 (처음 15초)
+                data = data[..., :desired_samples]
+                logger.info(f"Trimmed audio to {desired_duration} seconds.")
+
+            # Generate unique filename
             filename = f"generated_music_{uuid.uuid4()}.wav"
             output_path = os.path.join(output_dir, filename)
 
-            # 디렉토리 생성 (필요 시)
-            os.makedirs(output_dir, exist_ok=True)
+            # Save audio using soundfile
+            try:
+                sf.write(output_path, data, sampling_rate)
+                logger.info(f"Music saved to {output_path}")
+            except Exception as e:
+                logger.error(f"Failed to save audio to {output_path}: {e}")
+                raise e
 
-            # WAV 파일로 저장
-            sf.write(output_path, audio_np, sample_rate)
-            print(f'음악이 {output_path}에 저장되었습니다.')
-
-            # 파일 URL 생성
+            # Append the file URL
             file_url = f"/files/{filename}"
             file_urls.append(file_url)
 
         return file_urls
 
     except Exception as e:
+        logger.error(f"음악 생성 오류: {e}")
         raise HTTPException(status_code=500, detail=f"음악 생성 오류: {str(e)}")
+
 
 @app.post("/generate_music", response_model=MusicResponse)
 def create_music(entries: list[DiaryEntry]):
@@ -117,21 +189,23 @@ def create_music(entries: list[DiaryEntry]):
     """
     try:
         diary_entries = [entry.diary for entry in entries]
-        print(f"받은 일기들: {diary_entries}")
+        logger.info(f"받은 일기들: {diary_entries}")
 
         # 일기에서 프롬프트 추출
         prompts = [extract_music_prompt(entry) for entry in diary_entries]
-        print(f"생성된 프롬프트들: {prompts}")
+        logger.info(f"생성된 프롬프트들: {prompts}")
 
         # 음악 생성 및 파일 저장
-        file_urls = generate_and_save_music(prompts, sample_rate=32000, output_dir='generated_music_files')
+        file_urls = generate_and_save_music(prompts)
 
         return MusicResponse(file_urls=file_urls)
 
     except HTTPException as http_exc:
         raise http_exc
     except Exception as e:
+        logger.error(f"Unhandled error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 # 정적 파일 서빙 설정 (예: generated_music_files 디렉토리)
 from fastapi.staticfiles import StaticFiles
