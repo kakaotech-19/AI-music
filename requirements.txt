@@ -1,0 +1,10 @@
+numpy<2.0.0
+fastapi
+uvicorn
+openai==0.28
+transformers
+soundfile
+scipy
+python-dotenv
+datasets[audio]
+torchaudio==2.1.1
