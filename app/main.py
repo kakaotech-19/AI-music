@@ -21,6 +21,7 @@ OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY 환경 변수가 설정되지 않았습니다.")
 
+
 # Set OpenAI API key
 openai.api_key = OPENAI_API_KEY
 
@@ -208,5 +209,4 @@ def create_music(entries: list[DiaryEntry]):
 
 # 정적 파일 서빙 설정 (예: generated_music_files 디렉토리)
 from fastapi.staticfiles import StaticFiles
-
 app.mount("/files", StaticFiles(directory="generated_music_files"), name="files")
