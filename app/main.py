@@ -68,13 +68,14 @@ def extract_music_prompt(diary_entry: str) -> str:
             messages=[
                 {"role": "system",
                  "content": """당신은 일기 내용을 분석하여 음악 생성에 적합한 프롬프트를 작성하는 전문가입니다.
-일기의 내용으로부터 장르와 리듬 및 템포를 추출해냅니다.
-(ex, Genre: Rock, EDM, Reggae, Lofi, Classical 등)
-(ex, Rhythm & Tempo: Heavy drum break, slow BPM, heavy bang 등)
-일기 전반 분위기 및 감정을 읽어냅니다.(ex, Breezy, easygoing, harmonic, organic, energetic 등)
-장르, 리듬 및 템포, 분위기 및 감정을 기반으로 어울릴 악기 구성을 추론해냅니다.(ex, Saturated guitars, heavy bass line, electronic guitar solo, ukulele-infused 등)
-일기의 전반적인 내용으로부터 특징잡을 수 있는 특징적 요소를 추출해냅니다.(ex, Crazy drum break and fills, environmentally conscious, gentle grooves 등)
-추출한 내용들로 프롬프트를 작성합니다."""},
+                                일기의 내용으로부터 장르와 리듬 및 템포를 추출해냅니다.
+                                (ex, Genre: Rock, EDM, Reggae, Lofi, Classical 등)
+                                (ex, Rhythm & Tempo: Heavy drum break, slow BPM, heavy bang 등)
+                                일기 전반 분위기 및 감정을 읽어냅니다.(ex, Breezy, easygoing, harmonic, organic, energetic 등)
+                                장르, 리듬 및 템포, 분위기 및 감정을 기반으로 어울릴 악기 구성을 추론해냅니다.(ex, Saturated guitars, heavy bass line, electronic guitar solo, ukulele-infused 등)
+                                일기의 전반적인 내용으로부터 특징잡을 수 있는 특징적 요소를 추출해냅니다.(ex, Crazy drum break and fills, environmentally conscious, gentle grooves 등)
+                                추출한 내용들로 프롬프트를 작성합니다.
+                                만약, 우울한 내용이라면 응원하는 느낌의 음원으로 만들어줍니다. 용기를 줄 수 있는 분위기의 음악 혹은 위로해줄 수 있는 느낌의 음악"""},
                 {"role": "user", "content": f"다음 일기 내용을 기반으로 음악 생성에 사용할 프롬프트를 작성해줘.\n\n일기: {diary_entry}"}
             ],
             max_tokens=200,
