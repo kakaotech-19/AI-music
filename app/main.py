@@ -3,7 +3,6 @@ from pydantic import BaseModel
 import openai
 import replicate
 import os
-import uuid
 from dotenv import load_dotenv
 import boto3
 from botocore.exceptions import BotoCoreError, NoCredentialsError
@@ -20,23 +19,16 @@ load_dotenv()
 
 # OpenAI API 설정
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-if not OPENAI_API_KEY:
-    raise ValueError("OPENAI_API_KEY 환경 변수가 설정되지 않았습니다.")
 openai.api_key = OPENAI_API_KEY
 
 # Replicate API 설정
 REPLICATE_API_TOKEN = os.getenv('REPLICATE_API_TOKEN')
-if not REPLICATE_API_TOKEN:
-    raise ValueError("REPLICATE_API_TOKEN 환경 변수가 설정되지 않았습니다.")
 
 # AWS S3 설정
 AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
 AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
 AWS_S3_BUCKET_NAME = os.getenv('AWS_S3_BUCKET_NAME')
-AWS_S3_REGION = os.getenv('AWS_S3_REGION')  # 기본 리전을 설정하세요
-
-if not all([AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_S3_BUCKET_NAME, AWS_S3_REGION]):
-    raise ValueError("AWS S3 관련 환경 변수가 모두 설정되지 않았습니다.")
+AWS_S3_REGION = os.getenv('AWS_S3_REGION')
 
 s3_client = boto3.client(
     's3',
@@ -103,8 +95,8 @@ def generate_music_with_replicate(prompt: str) -> bytes:
             "meta/musicgen:671ac645ce5e552cc63a54a2bbff63fcf798043055d2dac5fc9e36a837eedcfb",
             input={
                 "prompt": prompt,
-                "duration": 15,            # 15초
-                "output_format": "mp3",    # mp3로 유지
+                "duration": 15,
+                "output_format": "mp3",
                 "normalization_strategy": "peak"
             },
             api_token=REPLICATE_API_TOKEN
@@ -163,7 +155,6 @@ def upload_to_s3(file_content: bytes, member_id: int, date_str: str) -> str:
             Key=file_key,
             Body=file_content,
             ContentType='audio/mpeg'
-            # ACL 제거
         )
         # S3 파일 URL 생성
         bgm_url = f"https://{AWS_S3_BUCKET_NAME}.s3.{AWS_S3_REGION}.amazonaws.com/{file_key}/{year}/{month}/{day}/bgm.mp3"
