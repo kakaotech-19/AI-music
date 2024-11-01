@@ -1,14 +1,14 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import openai
-from transformers import pipeline
+import replicate
 import os
 import uuid
 from dotenv import load_dotenv
-import soundfile as sf
-import numpy as np
+import boto3
+from botocore.exceptions import BotoCoreError, NoCredentialsError
 import logging
-import torch
+import requests
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -16,18 +16,37 @@ logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 
+# OpenAI API 설정
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY 환경 변수가 설정되지 않았습니다.")
-
-
-# Set OpenAI API key
 openai.api_key = OPENAI_API_KEY
+
+# Replicate API 설정
+REPLICATE_API_TOKEN = os.getenv('REPLICATE_API_TOKEN')
+if not REPLICATE_API_TOKEN:
+    raise ValueError("REPLICATE_API_TOKEN 환경 변수가 설정되지 않았습니다.")
+
+# AWS S3 설정
+AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
+AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
+AWS_S3_BUCKET_NAME = os.getenv('AWS_S3_BUCKET_NAME')
+AWS_S3_REGION = os.getenv('AWS_S3_REGION')
+
+if not all([AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_S3_BUCKET_NAME, AWS_S3_REGION]):
+    raise ValueError("AWS S3 관련 환경 변수가 모두 설정되지 않았습니다.")
+
+s3_client = boto3.client(
+    's3',
+    region_name=AWS_S3_REGION,
+    aws_access_key_id=AWS_ACCESS_KEY_ID,
+    aws_secret_access_key=AWS_SECRET_ACCESS_KEY
+)
 
 app = FastAPI(
     title="MusicGen AI API",
-    description="일기 기반 음악 생성 API 서버입니다.",
+    description="일기 기반 음악 생성 및 S3 업로드 API 서버입니다.",
     version="1.0"
 )
 
@@ -41,23 +60,6 @@ class MusicResponse(BaseModel):
     file_urls: list[str]
 
 
-# Load pipeline once at startup
-try:
-    pipe = pipeline("text-to-audio", model="facebook/musicgen-melody")
-    logger.info("MusicGen pipeline loaded successfully.")
-except Exception as e:
-    logger.error(f"Error loading MusicGen pipeline: {e}")
-    raise e
-
-# Test numpy availability
-try:
-    np.array([1, 2, 3])
-    logger.info("Numpy is available.")
-except ImportError:
-    logger.error("Numpy is not available.")
-    raise
-
-
 def extract_music_prompt(diary_entry: str) -> str:
     """
     사용자의 일기 내용을 기반으로 음악 생성 프롬프트를 추출하는 함수
@@ -68,124 +70,105 @@ def extract_music_prompt(diary_entry: str) -> str:
             messages=[
                 {"role": "system",
                  "content": """당신은 일기 내용을 분석하여 음악 생성에 적합한 프롬프트를 작성하는 전문가입니다.
-일기의 내용으로부터 장르와 리듬 및 템포를 추출해냅니다.
-(ex, Genre: Rock, EDM, Reggae, Lofi, Classical 등)
-(ex, Rhythm & Tempo: Heavy drum break, slow BPM, heavy bang 등)
-일기 전반 분위기 및 감정을 읽어냅니다.(ex, Breezy, easygoing, harmonic, organic, energetic 등)
-장르, 리듬 및 템포, 분위기 및 감정을 기반으로 어울릴 악기 구성을 추론해냅니다.(ex, Saturated guitars, heavy bass line, electronic guitar solo, ukulele-infused 등)
-일기의 전반적인 내용으로부터 특징잡을 수 있는 특징적 요소를 추출해냅니다.(ex, Crazy drum break and fills, environmentally conscious, gentle grooves 등)
-추출한 내용들로 프롬프트를 작성합니다."""},
+                                일기의 내용으로부터 장르와 리듬 및 템포를 추출해냅니다.
+                                (ex, Genre: Rock, EDM, Reggae, Lofi, Classical 등)
+                                (ex, Rhythm & Tempo: Heavy drum break, slow BPM, heavy bang 등)
+                                일기 전반 분위기 및 감정을 읽어냅니다.(ex, Breezy, easygoing, harmonic, organic, energetic 등)
+                                장르, 리듬 및 템포, 분위기 및 감정을 기반으로 어울릴 악기 구성을 추론해냅니다.(ex, Saturated guitars, heavy bass line, electronic guitar solo, ukulele-infused 등)
+                                일기의 전반적인 내용으로부터 특징잡을 수 있는 특징적 요소를 추출해냅니다.(ex, Crazy drum break and fills, environmentally conscious, gentle grooves 등)
+                                추출한 내용들로 프롬프트를 작성합니다.
+                                """},
                 {"role": "user", "content": f"다음 일기 내용을 기반으로 음악 생성에 사용할 프롬프트를 작성해줘.\n\n일기: {diary_entry}"}
             ],
             max_tokens=200,
             temperature=0.7,
         )
         prompt = response.choices[0].message['content'].strip()
+        logger.info(f"생성된 프롬프트: {prompt}")
         return prompt
     except Exception as e:
         logger.error(f"프롬프트 생성 오류: {e}")
         raise HTTPException(status_code=500, detail=f"프롬프트 생성 오류: {str(e)}")
 
 
-def generate_and_save_music(prompts: list[str], output_dir='generated_music_files') -> list[str]:
+def generate_music_with_replicate(prompt: str) -> bytes:
     """
-    주어진 프롬프트 리스트를 기반으로 음악을 생성하고 파일로 저장하는 함수
+    Replicate의 MusicGen 모델을 사용하여 음악을 생성하는 함수
+    Returns the bytes of the generated music file.
     """
     try:
-        # Generate audio using the pipeline with duration=15 seconds
-        audio_outputs = pipe(prompts)
+        logger.info(f"Replicate output type: 생성 시~작~")
+        output = replicate.run(
+            "meta/musicgen:671ac645ce5e552cc63a54a2bbff63fcf798043055d2dac5fc9e36a837eedcfb",
+            input={
+                "prompt": prompt,
+                "duration": 15,  # 15초
+                "output_format": "mp3",
+                "normalization_strategy": "peak"
+            },
+            api_token=REPLICATE_API_TOKEN
+        )
 
-        # 디버깅을 위해 출력 형식 로그
-        logger.info(f"audio_outputs type: {type(audio_outputs)}")
-        logger.info(f"audio_outputs content: {audio_outputs}")
+        logger.info(f"Replicate output type: {type(output)}")
+        logger.info(f"Replicate output: {output}")
 
-        # Create output directory if it doesn't exist
-        os.makedirs(output_dir, exist_ok=True)
+        if hasattr(output, 'read'):
+            logger.info(f"{output}")
 
-        # Save each generated audio to a file
-        file_urls = []
-        for idx, audio in enumerate(audio_outputs):
-            logger.info(f"Processing audio {idx + 1}: {audio}")
+            logger.info(f"1번!")
 
-            # 예상되는 키 확인 및 데이터 추출
-            if isinstance(audio, dict):
-                if 'audio' in audio and 'sampling_rate' in audio:
-                    data = audio['audio']
-                    sampling_rate = audio['sampling_rate']
-                elif 'array' in audio and 'sampling_rate' in audio:
-                    data = audio['array']
-                    sampling_rate = audio['sampling_rate']
-                elif 'samples' in audio and 'sampling_rate' in audio:
-                    data = audio['samples']
-                    sampling_rate = audio['sampling_rate']
-                else:
-                    logger.error("Unexpected audio format: missing 'audio', 'array', or 'samples' key.")
-                    raise KeyError("Unexpected audio format: missing 'audio', 'array', or 'samples' key.")
-            elif isinstance(audio, (np.ndarray, torch.Tensor)):
-                data = audio.cpu().numpy() if isinstance(audio, torch.Tensor) else audio
-                sampling_rate = 32000  # 모델에 따라 샘플링 레이트 조정
-            else:
-                logger.error(f"Unsupported audio format: {type(audio)}")
-                raise TypeError(f"Unsupported audio format: {type(audio)}")
+            # File-like object, read bytes
+            music_bytes = output.read()
+            logger.info(f"음악 생성 완료. 파일 데이터 읽음. 크기: {len(music_bytes)} bytes")
+            return music_bytes
+        elif isinstance(output, str):
+            logger.info(f"{output}")
 
-            # 데이터의 차원 확인 및 축소
-            if data.ndim == 3:
-                data = data.squeeze()  # (1, 1, 480000) -> (480000,)
-            elif data.ndim == 2 and data.shape[0] == 1:
-                data = data.squeeze(0)  # (1, 480000) -> (480000,)
-            elif data.ndim == 2:
-                pass  # 이미 (채널, 샘플) 형태
-            else:
-                logger.error(f"Unexpected data shape: {data.shape}")
-                raise ValueError(f"Unexpected data shape: {data.shape}")
-
-            # 샘플링 레이트 확인
-            if sampling_rate <= 0:
-                logger.error(f"Invalid sampling rate: {sampling_rate}")
-                raise ValueError(f"Invalid sampling rate: {sampling_rate}")
-
-            # 원하는 길이 설정 (15초)
-            desired_duration = 15  # 초
-            desired_samples = desired_duration * sampling_rate  # 샘플 수
-
-            # 현재 샘플 수 확인
-            current_samples = data.shape[-1]
-            if current_samples < desired_samples:
-                logger.warning(
-                    f"Generated audio is shorter than desired duration: {current_samples / sampling_rate:.2f}s")
-                # 필요에 따라 패딩을 추가할 수 있습니다.
-            else:
-                # 오디오 데이터 슬라이싱 (처음 15초)
-                data = data[..., :desired_samples]
-                logger.info(f"Trimmed audio to {desired_duration} seconds.")
-
-            # Generate unique filename
-            filename = f"generated_music_{uuid.uuid4()}.wav"
-            output_path = os.path.join(output_dir, filename)
-
-            # Save audio using soundfile
-            try:
-                sf.write(output_path, data, sampling_rate)
-                logger.info(f"Music saved to {output_path}")
-            except Exception as e:
-                logger.error(f"Failed to save audio to {output_path}: {e}")
-                raise e
-
-            # Append the file URL
-            file_url = f"/files/{filename}"
-            file_urls.append(file_url)
-
-        return file_urls
-
+            logger.info(f"2번!")
+            # If output is a URL string, download the file
+            logger.info(f"음악 생성 완료. 출력 URL: {output}")
+            response = requests.get(output)
+            response.raise_for_status()
+            logger.info("음악 파일 다운로드 성공.")
+            return response.content
+        else:
+            logger.error(f"Unexpected output type from Replicate: {type(output)}")
+            raise HTTPException(status_code=500, detail="Unexpected output type from Replicate")
+    except replicate.exceptions.ApiException as e:
+        logger.error(f"Replicate API 오류: {e}")
+        raise HTTPException(status_code=500, detail=f"Replicate API 오류: {str(e)}")
     except Exception as e:
         logger.error(f"음악 생성 오류: {e}")
         raise HTTPException(status_code=500, detail=f"음악 생성 오류: {str(e)}")
 
 
+def upload_to_s3(file_content: bytes, filename: str) -> str:
+    """
+    파일 내용을 S3에 업로드하고 URL을 반환하는 함수
+    """
+    if not file_content:
+        logger.error("파일 내용이 비어 있습니다.")
+        raise HTTPException(status_code=500, detail="파일 내용이 비어 있습니다.")
+
+    try:
+        s3_client.put_object(
+            Bucket=AWS_S3_BUCKET_NAME,
+            Key=f"music-ai/{filename}",
+            Body=file_content,
+            ContentType='audio/mpeg',
+        )
+        file_url = f"https://{AWS_S3_BUCKET_NAME}.s3.{AWS_S3_REGION}.amazonaws.com/music-ai/1/{filename}"
+        logger.info(f"S3 업로드 완료: {file_url}")
+        return file_url
+    except (BotoCoreError, NoCredentialsError) as e:
+        logger.error(f"S3 업로드 오류: {e}")
+        raise HTTPException(status_code=500, detail=f"S3 업로드 오류: {str(e)}")
+
+
 @app.post("/generate_music", response_model=MusicResponse)
 def create_music(entries: list[DiaryEntry]):
     """
-    여러 개의 일기 내용을 받아 음악을 생성하고 파일 URL 리스트를 반환하는 엔드포인트
+    여러 개의 일기 내용을 받아 음악을 생성하고 S3 파일 URL 리스트를 반환하는 엔드포인트
     """
     try:
         diary_entries = [entry.diary for entry in entries]
@@ -195,8 +178,22 @@ def create_music(entries: list[DiaryEntry]):
         prompts = [extract_music_prompt(entry) for entry in diary_entries]
         logger.info(f"생성된 프롬프트들: {prompts}")
 
-        # 음악 생성 및 파일 저장
-        file_urls = generate_and_save_music(prompts)
+        file_urls = []
+        for prompt in prompts:
+            # 음악 생성
+            music_content = generate_music_with_replicate(prompt)
+            if not music_content:
+                logger.error("음악 생성 후 파일 내용이 비어 있습니다.")
+                raise HTTPException(status_code=500, detail="음악 생성 후 파일 내용이 비어 있습니다.")
+
+            # 고유한 파일명 생성
+            filename = f"generated_music_{uuid.uuid4()}.mp3"
+            logger.info(f"생성된 파일명: {filename}")
+
+            # S3에 업로드
+            file_url = upload_to_s3(music_content, filename)
+            logger.info(f"업로드된 S3 파일 URL: {file_url}")
+            file_urls.append(file_url)
 
         return MusicResponse(file_urls=file_urls)
 
@@ -205,8 +202,3 @@ def create_music(entries: list[DiaryEntry]):
     except Exception as e:
         logger.error(f"Unhandled error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-
-# 정적 파일 서빙 설정 (예: generated_music_files 디렉토리)
-from fastapi.staticfiles import StaticFiles
-app.mount("/files", StaticFiles(directory="generated_music_files"), name="files")
