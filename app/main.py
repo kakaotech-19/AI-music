@@ -9,6 +9,7 @@ import boto3
 from botocore.exceptions import BotoCoreError, NoCredentialsError
 import logging
 import requests
+from datetime import datetime
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -32,7 +33,7 @@ if not REPLICATE_API_TOKEN:
 AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
 AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
 AWS_S3_BUCKET_NAME = os.getenv('AWS_S3_BUCKET_NAME')
-AWS_S3_REGION = os.getenv('AWS_S3_REGION')
+AWS_S3_REGION = os.getenv('AWS_S3_REGION')  # 기본 리전을 설정하세요
 
 if not all([AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_S3_BUCKET_NAME, AWS_S3_REGION]):
     raise ValueError("AWS S3 관련 환경 변수가 모두 설정되지 않았습니다.")
@@ -50,19 +51,21 @@ app = FastAPI(
     version="1.0"
 )
 
-
 # Define data models
-class DiaryEntry(BaseModel):
-    diary: str
-
+class MusicRequest(BaseModel):
+    memberId: int        # AI 컨텐츠 생성 완료 시 알림을 보낼 회원 ID
+    date: str            # 일기 작성 날짜 (YYYY-MM-DD)
+    content: str         # 일기 내용
+    emotion: str         # 감정 정보 (BGM 장르 선정에 사용)
 
 class MusicResponse(BaseModel):
-    file_urls: list[str]
+    memberId: int
+    date: str
+    bgmUrl: str
 
-
-def extract_music_prompt(diary_entry: str) -> str:
+def extract_music_prompt(content: str, emotion: str) -> str:
     """
-    사용자의 일기 내용을 기반으로 음악 생성 프롬프트를 추출하는 함수
+    사용자의 일기 내용과 감정을 기반으로 음악 생성 프롬프트를 추출하는 함수
     """
     try:
         response = openai.ChatCompletion.create(
@@ -78,7 +81,7 @@ def extract_music_prompt(diary_entry: str) -> str:
                                 일기의 전반적인 내용으로부터 특징잡을 수 있는 특징적 요소를 추출해냅니다.(ex, Crazy drum break and fills, environmentally conscious, gentle grooves 등)
                                 추출한 내용들로 프롬프트를 작성합니다.
                                 만약, 우울한 내용이라면 응원하는 느낌의 음원으로 만들어줍니다. 용기를 줄 수 있는 분위기의 음악 혹은 위로해줄 수 있는 느낌의 음악"""},
-                {"role": "user", "content": f"다음 일기 내용을 기반으로 음악 생성에 사용할 프롬프트를 작성해줘.\n\n일기: {diary_entry}"}
+                {"role": "user", "content": f"다음 일기 내용을 기반으로 음악 생성에 사용할 프롬프트를 작성해줘.\n\n일기: {content}\n감정: {emotion}"}
             ],
             max_tokens=200,
             temperature=0.7,
@@ -90,41 +93,31 @@ def extract_music_prompt(diary_entry: str) -> str:
         logger.error(f"프롬프트 생성 오류: {e}")
         raise HTTPException(status_code=500, detail=f"프롬프트 생성 오류: {str(e)}")
 
-
 def generate_music_with_replicate(prompt: str) -> bytes:
     """
     Replicate의 MusicGen 모델을 사용하여 음악을 생성하는 함수
     Returns the bytes of the generated music file.
     """
     try:
-        logger.info(f"Replicate output type: 생성 시~작~")
         output = replicate.run(
             "meta/musicgen:671ac645ce5e552cc63a54a2bbff63fcf798043055d2dac5fc9e36a837eedcfb",
             input={
                 "prompt": prompt,
-                "duration": 15,  # 15초
-                "output_format": "mp3",
+                "duration": 15,            # 15초
+                "output_format": "mp3",    # mp3로 유지
                 "normalization_strategy": "peak"
             },
             api_token=REPLICATE_API_TOKEN
         )
-
         logger.info(f"Replicate output type: {type(output)}")
         logger.info(f"Replicate output: {output}")
 
         if hasattr(output, 'read'):
-            logger.info(f"{output}")
-
-            logger.info(f"1번!")
-
             # File-like object, read bytes
             music_bytes = output.read()
             logger.info(f"음악 생성 완료. 파일 데이터 읽음. 크기: {len(music_bytes)} bytes")
             return music_bytes
         elif isinstance(output, str):
-            logger.info(f"{output}")
-
-            logger.info(f"2번!")
             # If output is a URL string, download the file
             logger.info(f"음악 생성 완료. 출력 URL: {output}")
             response = requests.get(output)
@@ -141,8 +134,7 @@ def generate_music_with_replicate(prompt: str) -> bytes:
         logger.error(f"음악 생성 오류: {e}")
         raise HTTPException(status_code=500, detail=f"음악 생성 오류: {str(e)}")
 
-
-def upload_to_s3(file_content: bytes, filename: str) -> str:
+def upload_to_s3(file_content: bytes, member_id: int, date_str: str) -> str:
     """
     파일 내용을 S3에 업로드하고 URL을 반환하는 함수
     """
@@ -151,51 +143,72 @@ def upload_to_s3(file_content: bytes, filename: str) -> str:
         raise HTTPException(status_code=500, detail="파일 내용이 비어 있습니다.")
 
     try:
+        # 날짜 문자열을 datetime 객체로 변환
+        try:
+            date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+        except ValueError:
+            logger.error("날짜 형식이 올바르지 않습니다. YYYY-MM-DD 형식을 사용하세요.")
+            raise HTTPException(status_code=400, detail="날짜 형식이 올바르지 않습니다. YYYY-MM-DD 형식을 사용하세요.")
+
+        year = date_obj.strftime("%Y")
+        month = date_obj.strftime("%m")
+        day = date_obj.strftime("%d")
+
+        # 파일 경로 생성: music-ai/memberId/yyyy/MM/dd/bgm.mp3
+        file_key = f"music-ai/{member_id}"
+
+        # S3에 파일 업로드 (ACL 제거)
         s3_client.put_object(
             Bucket=AWS_S3_BUCKET_NAME,
-            Key=f"music-ai/{filename}",
+            Key=file_key,
             Body=file_content,
-            ContentType='audio/mpeg',
+            ContentType='audio/mpeg'
+            # ACL 제거
         )
-        file_url = f"https://{AWS_S3_BUCKET_NAME}.s3.{AWS_S3_REGION}.amazonaws.com/music-ai/{filename}"
-        logger.info(f"S3 업로드 완료: {file_url}")
-        return file_url
+        # S3 파일 URL 생성
+        bgm_url = f"https://{AWS_S3_BUCKET_NAME}.s3.{AWS_S3_REGION}.amazonaws.com/{file_key}/{year}/{month}/{day}/bgm.mp3"
+        logger.info(f"S3 업로드 완료: {bgm_url}")
+        return bgm_url
+
     except (BotoCoreError, NoCredentialsError) as e:
         logger.error(f"S3 업로드 오류: {e}")
         raise HTTPException(status_code=500, detail=f"S3 업로드 오류: {str(e)}")
 
-
-@app.post("/generate_music", response_model=MusicResponse)
-def create_music(entries: list[DiaryEntry]):
+@app.post("/music-ai", response_model=MusicResponse)
+def create_music(request: MusicRequest):
     """
-    여러 개의 일기 내용을 받아 음악을 생성하고 S3 파일 URL 리스트를 반환하는 엔드포인트
+    BGM 생성 요청을 받아 음악을 생성하고 S3에 업로드한 후 URL을 반환하는 엔드포인트
     """
     try:
-        diary_entries = [entry.diary for entry in entries]
-        logger.info(f"받은 일기들: {diary_entries}")
+        member_id = request.memberId
+        date_str = request.date
+        content = request.content
+        emotion = request.emotion
 
-        # 일기에서 프롬프트 추출
-        prompts = [extract_music_prompt(entry) for entry in diary_entries]
-        logger.info(f"생성된 프롬프트들: {prompts}")
+        logger.info(f"Received request: memberId={member_id}, date={date_str}, emotion={emotion}")
 
-        file_urls = []
-        for prompt in prompts:
-            # 음악 생성
-            music_content = generate_music_with_replicate(prompt)
-            if not music_content:
-                logger.error("음악 생성 후 파일 내용이 비어 있습니다.")
-                raise HTTPException(status_code=500, detail="음악 생성 후 파일 내용이 비어 있습니다.")
+        # 프롬프트 생성
+        prompt = extract_music_prompt(content, emotion)
 
-            # 고유한 파일명 생성
-            filename = f"generated_music_{uuid.uuid4()}.mp3"
-            logger.info(f"생성된 파일명: {filename}")
+        # 음악 생성
+        music_content = generate_music_with_replicate(prompt)
+        if not music_content:
+            logger.error("음악 생성 후 파일 내용이 비어 있습니다.")
+            raise HTTPException(status_code=500, detail="음악 생성 후 파일 내용이 비어 있습니다.")
 
-            # S3에 업로드
-            file_url = upload_to_s3(music_content, filename)
-            logger.info(f"업로드된 S3 파일 URL: {file_url}")
-            file_urls.append(file_url)
+        # S3에 업로드
+        bgm_url = upload_to_s3(music_content, member_id, date_str)
 
-        return MusicResponse(file_urls=file_urls)
+        # 응답 생성
+        response = MusicResponse(
+            memberId=member_id,
+            date=date_str,
+            bgmUrl=bgm_url
+        )
+
+        logger.info(f"Response: {response}")
+
+        return response
 
     except HTTPException as http_exc:
         raise http_exc
