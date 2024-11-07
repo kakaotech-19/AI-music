@@ -20,26 +20,16 @@ load_dotenv()
 
 # OpenAI API 설정
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-if not OPENAI_API_KEY:
-    logger.error("OPENAI_API_KEY 환경 변수가 설정되지 않았습니다.")
-    raise ValueError("OPENAI_API_KEY 환경 변수가 설정되지 않았습니다.")
 openai.api_key = OPENAI_API_KEY
 
 # Replicate API 설정
 REPLICATE_API_TOKEN = os.getenv('REPLICATE_API_TOKEN')
-if not REPLICATE_API_TOKEN:
-    logger.error("REPLICATE_API_TOKEN 환경 변수가 설정되지 않았습니다.")
-    raise ValueError("REPLICATE_API_TOKEN 환경 변수가 설정되지 않았습니다.")
 
 # AWS S3 설정
 AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
 AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
 AWS_S3_BUCKET_NAME = os.getenv('AWS_S3_BUCKET_NAME')
 AWS_S3_REGION = os.getenv('AWS_S3_REGION')
-
-if not all([AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_S3_BUCKET_NAME, AWS_S3_REGION]):
-    logger.error("AWS S3 관련 환경 변수가 모두 설정되지 않았습니다.")
-    raise ValueError("AWS S3 관련 환경 변수가 모두 설정되지 않았습니다.")
 
 s3_client = boto3.client(
     's3',
@@ -48,9 +38,7 @@ s3_client = boto3.client(
     aws_secret_access_key=AWS_SECRET_ACCESS_KEY
 )
 
-# Webhook URL 설정 (고정 URL 또는 클라이언트 요청 시 제공)
-# 클라이언트가 요청 시 webhookUrl을 제공하므로 여기서는 기본값을 설정하지 않습니다.
-# 만약 고정된 웹훅 URL이 있다면 아래 주석을 해제하고 URL을 설정하세요.
+# Webhook URL 설정
 DEFAULT_WEBHOOK_URL = os.getenv('DEFAULT_WEBHOOK_URL')  # "http://localhost:8080/api/v1/webhook/ai/bgm"
 
 app = FastAPI(
