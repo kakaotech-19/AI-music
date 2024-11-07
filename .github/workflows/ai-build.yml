@@ -1,0 +1,16 @@
+#reuse workflow
+
+name: Reuse Build and Publish to GHCR
+
+on:
+  push:
+    branches: [main, release, develop]
+  pull_request:
+
+jobs:
+  build-and-publish:
+    uses: kakaotech-19/.github/.github/workflows/build-and-publish-ghcr.yml@main
+    secrets:
+      ORGANIZATION: ${{ secrets.ORGANIZATION }}
+      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+      DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}

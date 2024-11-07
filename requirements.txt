@@ -1,0 +1,7 @@
+fastapi
+pydantic
+openai
+replicate
+boto3
+python-dotenv
+requests
