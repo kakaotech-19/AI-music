@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel
 import openai
 import replicate
 import os
@@ -38,8 +38,8 @@ s3_client = boto3.client(
     aws_secret_access_key=AWS_SECRET_ACCESS_KEY
 )
 
-# Webhook URL 설정
-DEFAULT_WEBHOOK_URL = os.getenv('DEFAULT_WEBHOOK_URL')  # "http://localhost:8080/api/v1/webhook/ai/bgm"
+# 고정된 웹훅 URL 설정
+FIXED_WEBHOOK_URL = "http://localhost:8080/api/v1/webhook/ai/bgm"
 
 app = FastAPI(
     title="MusicGen AI API",
@@ -53,7 +53,6 @@ class MusicRequest(BaseModel):
     date: str            # 일기 작성 날짜 (YYYY-MM-DD)
     content: str         # 일기 내용
     emotion: str         # 감정 정보 (BGM 장르 선정에 사용)
-    webhookUrl: HttpUrl  # 음악 생성 완료 시 결과를 알릴 웹훅 URL
 
 class MusicResponse(BaseModel):
     message: str
@@ -65,7 +64,7 @@ def extract_music_prompt(content: str, emotion: str) -> str:
     """
     try:
         response = openai.ChatCompletion.create(
-            model="gpt-4",
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system",
                  "content": """당신은 일기 내용을 분석하여 음악 생성에 적합한 프롬프트를 작성하는 전문가입니다.
@@ -152,7 +151,7 @@ def upload_to_s3(file_content: bytes, member_id: int, date_str: str) -> str:
         day = date_obj.strftime("%d")
 
         # 파일 경로 생성: music-ai/memberId/yyyy/MM/dd/bgm.mp3
-        file_key = f"music-ai/{member_id}"
+        file_key = f"music-ai/{member_id}/{year}/{month}/{day}/bgm.mp3"
 
         # S3에 파일 업로드
         s3_client.put_object(
@@ -162,7 +161,7 @@ def upload_to_s3(file_content: bytes, member_id: int, date_str: str) -> str:
             ContentType='audio/mpeg'
         )
         # S3 파일 URL 생성
-        bgm_url = f"https://{AWS_S3_BUCKET_NAME}.s3.{AWS_S3_REGION}.amazonaws.com/{file_key}/{year}/{month}/{day}/bgm.mp3"
+        bgm_url = f"https://{AWS_S3_BUCKET_NAME}.s3.{AWS_S3_REGION}.amazonaws.com/{file_key}"
         logger.info(f"S3 업로드 완료: {bgm_url}")
         return bgm_url
 
@@ -170,20 +169,25 @@ def upload_to_s3(file_content: bytes, member_id: int, date_str: str) -> str:
         logger.error(f"S3 업로드 오류: {e}")
         raise HTTPException(status_code=500, detail=f"S3 업로드 오류: {str(e)}")
 
-def send_webhook(webhook_url: str, data: dict):
+def send_webhook(webhook_url: str, data: dict, retries: int = 3):
     """
     클라이언트의 웹훅 URL로 POST 요청을 보내는 함수
     """
-    try:
-        headers = {
-            "Content-Type": "application/json"
-        }
-        response = requests.post(webhook_url, json=data, headers=headers)
-        response.raise_for_status()
-        logger.info(f"웹훅 성공적으로 전송: {webhook_url}")
-    except requests.exceptions.RequestException as e:
-        logger.error(f"웹훅 전송 실패: {e}")
-        # 필요 시 재시도 로직 추가 가능
+    headers = {
+        "Content-Type": "application/json"
+    }
+    for attempt in range(retries):
+        try:
+            response = requests.post(webhook_url, json=data, headers=headers, timeout=10)
+            response.raise_for_status()
+            logger.info(f"웹훅 성공적으로 전송: {webhook_url}")
+            break
+        except requests.exceptions.RequestException as e:
+            logger.error(f"웹훅 전송 시도 {attempt + 1} 실패: {e}")
+            if attempt < retries - 1:
+                logger.info("재시도 중...")
+            else:
+                logger.error(f"웹훅 전송이 모두 실패했습니다: {webhook_url}")
 
 def background_music_process(request: MusicRequest):
     """
@@ -194,7 +198,7 @@ def background_music_process(request: MusicRequest):
         date_str = request.date
         content = request.content
         emotion = request.emotion
-        webhook_url = request.webhookUrl  # 클라이언트가 제공한 웹훅 URL
+        webhook_url = FIXED_WEBHOOK_URL  # 고정된 웹훅 URL 사용
 
         logger.info(f"백그라운드 작업 시작: memberId={member_id}, date={date_str}, emotion={emotion}")
 
@@ -227,7 +231,7 @@ def background_music_process(request: MusicRequest):
 
     except HTTPException as http_exc:
         # 웹훅으로 에러 알림 전송
-        send_webhook(request.webhookUrl, {
+        send_webhook(FIXED_WEBHOOK_URL, {
             "memberId": request.memberId,
             "date": request.date,
             "error": http_exc.detail
@@ -235,7 +239,7 @@ def background_music_process(request: MusicRequest):
     except Exception as e:
         logger.error(f"백그라운드 작업 중 예외 발생: {e}")
         # 웹훅으로 에러 알림 전송
-        send_webhook(request.webhookUrl, {
+        send_webhook(FIXED_WEBHOOK_URL, {
             "memberId": request.memberId,
             "date": request.date,
             "error": f"백그라운드 작업 중 예외 발생: {str(e)}"
