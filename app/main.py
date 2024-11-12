@@ -39,7 +39,7 @@ s3_client = boto3.client(
 )
 
 # 고정된 웹훅 URL 설정
-FIXED_WEBHOOK_URL = "http://localhost:8080/api/v1/webhook/ai/bgm"
+FIXED_WEBHOOK_URL = "http://backend:8080/api/v1/webhook/ai/bgm"
 
 app = FastAPI(
     title="MusicGen AI API",
