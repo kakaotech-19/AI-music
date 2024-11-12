@@ -5,3 +5,4 @@ replicate
 boto3
 python-dotenv
 requests
+python-multipart
