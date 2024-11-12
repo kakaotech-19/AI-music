@@ -1,6 +1,6 @@
 fastapi
 pydantic
-openai
+openai==0.28
 replicate
 boto3
 python-dotenv

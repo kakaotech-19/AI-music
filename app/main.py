@@ -272,5 +272,5 @@ def create_music(request: MusicRequest, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=500, detail=str(e))
 
 # 정적 파일 서빙 설정 (예: generated_music_files 디렉토리)
-from fastapi.staticfiles import StaticFiles
-app.mount("/files", StaticFiles(directory="generated_music_files"), name="files")
+# from fastapi.staticfiles import StaticFiles
+# app.mount("/files", StaticFiles(directory="generated_music_files"), name="files")
