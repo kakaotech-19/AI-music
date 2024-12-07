@@ -41,12 +41,6 @@ s3_client = boto3.client(
     aws_secret_access_key=AWS_SECRET_ACCESS_KEY
 )
 
-<<<<<<< Updated upstream
-# 고정된 웹훅 URL 설정
-FIXED_WEBHOOK_URL = "http://backend:8080/api/v1/webhook/ai/bgm"
-
-=======
->>>>>>> Stashed changes
 app = FastAPI(
     title="MusicGen AI API",
     description="일기 기반 음악 생성 및 S3 업로드 API 서버입니다.",
@@ -103,38 +97,6 @@ def generate_music_prompt(genre: str, instruments: list) -> str:
     except Exception as e:
         logger.error(f"음악 프롬프트 생성 오류: {e}")
         raise HTTPException(status_code=500, detail=f"음악 프롬프트 생성 오류: {str(e)}")
-
-
-# def extract_music_prompt(content: str, emotion: str) -> str:
-#     """
-#     사용자의 일기 내용과 감정을 기반으로 음악 생성 프롬프트를 추출하는 함수
-#     """
-#     try:
-#         response = openai.ChatCompletion.create(
-#             model="gpt-4o-mini",
-#             messages=[
-#                 {"role": "system",
-#                  "content": """당신은 일기 내용을 분석하여 음악 생성에 적합한 프롬프트를 작성하는 전문가입니다.
-#                                 음악의 처음과 끝에 페이드 효과를 1초 넣습니다.
-#                                 일기의 내용으로부터 장르와 리듬 및 템포를 추출해냅니다.
-#                                 (ex, Genre: Rock, EDM, Reggae, Lofi, Classical 등)
-#                                 (ex, Rhythm & Tempo: Heavy drum break, slow BPM, heavy bang 등)
-#                                 일기 전반 분위기 및 감정을 읽어냅니다.(ex, Breezy, easygoing, harmonic, organic, energetic 등)
-#                                 장르, 리듬 및 템포, 분위기 및 감정을 기반으로 어울릴 악기 구성을 추론해냅니다.(ex, Saturated guitars, heavy bass line, electronic guitar solo, ukulele-infused 등)
-#                                 일기의 전반적인 내용으로부터 특징잡을 수 있는 특징적 요소를 추출해냅니다.(ex, Crazy drum break and fills, environmentally conscious, gentle grooves 등)
-#                                 추출한 내용들로 프롬프트를 작성합니다.
-#                                 만약, 우울한 내용이라면 응원하는 느낌의 음원으로 만들어줍니다. 용기를 줄 수 있는 분위기의 음악 혹은 위로해줄 수 있는 느낌의 음악""" },
-#                 {"role": "user", "content": f"다음 일기 내용을 기반으로 음악 생성에 사용할 프롬프트를 작성해줘.\n\n일기: {content}\n감정: {emotion}"}
-#             ],
-#             max_tokens=200,
-#             temperature=0.7,
-#         )
-#         prompt = response.choices[0].message['content'].strip()
-#         logger.info(f"생성된 프롬프트: {prompt}")
-#         return prompt
-#     except Exception as e:
-#         logger.error(f"프롬프트 생성 오류: {e}")
-#         raise HTTPException(status_code=500, detail=f"프롬프트 생성 오류: {str(e)}")
 
 def generate_music_with_replicate(prompt: str) -> bytes:
     """
@@ -320,8 +282,3 @@ def create_music(request: MusicRequest, background_tasks: BackgroundTasks):
     except Exception as e:
         logger.error(f"Unhandled error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-
-# 정적 파일 서빙 설정 (예: generated_music_files 디렉토리)
-# from fastapi.staticfiles import StaticFiles
-# app.mount("/files", StaticFiles(directory="generated_music_files"), name="files")
