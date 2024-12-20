@@ -4,13 +4,15 @@ name: Reuse Build and Publish to GHCR
 
 on:
   push:
-    branches: [main, release, develop]
+    branches: [main, develop]
   pull_request:
 
 jobs:
   build-and-publish:
     uses: kakaotech-19/.github/.github/workflows/build-and-publish-ghcr.yml@main
-    secrets:
-      ORGANIZATION: ${{ secrets.ORGANIZATION }}
-      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
-      DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+    secrets: inherit
+  
+  dispatch-cd:
+    needs: build-and-publish
+    uses: kakaotech-19/.github/.github/workflows/dispatch-cd.yaml@main
+    secrets: inherit
