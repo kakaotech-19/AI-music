@@ -166,7 +166,7 @@ def background_music_process(request: MusicRequest):
         member_id = request.memberId
         date_str = request.date
         content = request.content
-        webhook_url = f"http://{request.apiDomainUrl}/webhook"  # apiDomainUrl 기반 동적 웹훅 URL
+        webhook_url = f"http://{request.apiDomainUrl}/webhook/ai/bgm"  # apiDomainUrl 기반 동적 웹훅 URL
         genre = request.genre
         emotion = request.emotion
 
