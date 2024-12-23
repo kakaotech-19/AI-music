@@ -10,6 +10,7 @@ import logging
 import requests
 from datetime import datetime
 import uuid
+import time
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -142,8 +143,8 @@ def upload_to_s3(file_content: bytes, member_id: int, date_str: str) -> str:
     음악 파일을 S3에 업로드하고 파일의 URL을 반환하는 함수
     """
     try:
-        date = datetime.strptime(date_str, "%Y-%m-%d")
-        file_key = f"music-ai/{member_id}/{date.year}/{date.month}/{date.day}/bgm.mp3"
+        # date = datetime.strptime(date_str, "%Y-%m-%d")
+        file_key = f"music-ai/{member_id}/{date_str}/bgm.mp3"
 
         s3_client.put_object(
             Bucket=AWS_S3_BUCKET_NAME,
